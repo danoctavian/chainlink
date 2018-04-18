@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -13,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestTxManager_CreateTx(t *testing.T) {
+func TestTxManager_CreateTx_Success(t *testing.T) {
 	t.Parallel()
 	app, cleanup := cltest.NewApplicationWithKeyStore()
 	defer cleanup()
@@ -30,6 +31,7 @@ func TestTxManager_CreateTx(t *testing.T) {
 	ethMock.Register("eth_getTransactionCount", utils.Uint64ToHex(nonce))
 	ethMock.Register("eth_sendRawTransaction", hash)
 	ethMock.Register("eth_blockNumber", utils.Uint64ToHex(sentAt))
+	assert.Nil(t, app.Start())
 
 	a, err := manager.CreateTx(to, data)
 	assert.Nil(t, err)
@@ -183,4 +185,42 @@ func TestTxManager_ActivateAccount(t *testing.T) {
 	aa := txm.GetActiveAccount()
 	assert.Equal(t, account.Address, aa.Address)
 	assert.Equal(t, uint64(0x2d0), aa.GetNonce())
+}
+
+func TestActiveAccount_GetAndIncrementNonce_YieldsCurrentNonceAndIncrements(t *testing.T) {
+	account := accounts.Account{Address: common.HexToAddress("0xbf4ed7b27f1d666546e30d74d50d173d20bca754")}
+	activeAccount := strpkg.ActiveAccount{
+		Account: account,
+	}
+
+	activeAccount.GetAndIncrementNonce(func(y uint64) error {
+		assert.Equal(t, uint64(0), y)
+		return nil
+	})
+	assert.Equal(t, uint64(1), activeAccount.GetNonce())
+
+	activeAccount.GetAndIncrementNonce(func(y uint64) error {
+		assert.Equal(t, uint64(1), y)
+		return nil
+	})
+	assert.Equal(t, uint64(2), activeAccount.GetNonce())
+}
+
+func TestActiveAccount_GetAndIncrementNonce_DoesNotIncrementWhenCallbackThrowsException(t *testing.T) {
+	account := accounts.Account{Address: common.HexToAddress("0xbf4ed7b27f1d666546e30d74d50d173d20bca754")}
+	activeAccount := strpkg.ActiveAccount{
+		Account: account,
+	}
+
+	err := activeAccount.GetAndIncrementNonce(func(y uint64) error {
+		assert.Equal(t, uint64(0), y)
+		return errors.New("Should not increment")
+	})
+	assert.NotNil(t, err)
+	err = activeAccount.GetAndIncrementNonce(func(y uint64) error {
+		assert.Equal(t, uint64(0), y)
+		return errors.New("Should not increment again")
+	})
+	assert.NotNil(t, err)
+	assert.Equal(t, uint64(0), activeAccount.GetNonce())
 }

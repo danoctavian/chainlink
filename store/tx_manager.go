@@ -1,8 +1,10 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
@@ -26,37 +28,41 @@ type TxManager struct {
 
 // CreateTx signs and sends a transaction to the Ethereum blockchain.
 func (txm *TxManager) CreateTx(to common.Address, data []byte) (*models.Tx, error) {
-	account, err := txm.keyStore.GetAccount()
-	if err != nil {
-		return nil, err
+	if txm.activeAccount == nil {
+		return nil, errors.New("Must activate an account before creating a transaction")
 	}
-	nonce, err := txm.GetNonce(account.Address)
-	if err != nil {
-		return nil, err
-	}
-	tx, err := txm.orm.CreateTx(
-		account.Address,
-		nonce,
-		to,
-		data,
-		big.NewInt(0),
-		defaultGasLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
+
 	blkNum, err := txm.GetBlockNumber()
 	if err != nil {
 		return nil, err
 	}
 
-	gasPrice := &txm.config.EthGasPriceDefault
-	_, err = txm.createAttempt(tx, gasPrice, blkNum)
-	if err != nil {
-		return tx, err
-	}
+	var tx *models.Tx
+	txm.activeAccount.GetAndIncrementNonce(func(nonce uint64) error {
+		tx, err = txm.orm.CreateTx(
+			txm.activeAccount.Address,
+			nonce,
+			to,
+			data,
+			big.NewInt(0),
+			defaultGasLimit,
+		)
+		if err != nil {
+			// TODO: Check if anything needs to be rolled back
+			return err
+		}
 
-	return tx, nil
+		gasPrice := txm.config.EthGasPriceDefault
+		_, err = txm.createAttempt(tx, &gasPrice, blkNum)
+		if err != nil {
+			// TODO: Rollback
+			return err
+		}
+
+		return nil
+	})
+
+	return tx, err
 }
 
 // MeetsMinConfirmations returns true if the given transaction hash has been
@@ -214,9 +220,24 @@ func (txm *TxManager) ActivateAccount(account accounts.Account) error {
 type ActiveAccount struct {
 	accounts.Account
 	nonce uint64
+	mutex sync.Mutex
 }
 
 // GetNonce returns the client side managed nonce.
 func (a *ActiveAccount) GetNonce() uint64 {
 	return a.nonce
+}
+
+// Yield the current nonce to a callback function and increment it once the
+// callback has finished executing
+func (a *ActiveAccount) GetAndIncrementNonce(callback func(uint64) error) error {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+
+	err := callback(a.nonce)
+	if err == nil {
+		a.nonce = a.nonce + 1
+	}
+
+	return err
 }
