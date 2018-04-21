@@ -127,13 +127,14 @@ func (h BlockHeader) Hash() common.Hash {
 }
 
 func (h BlockHeader) ToIndexableBlockNumber() *IndexableBlockNumber {
-	return NewIndexableBlockNumber(h.Number.ToInt(), h.Hash())
+	return NewIndexableBlockNumberWithParentHash(h.Number.ToInt(), h.Hash(), h.ParentHash)
 }
 
 type IndexableBlockNumber struct {
 	Number hexutil.Big `json:"number" storm:"id,unique"`
 	Digits int         `json:"digits" storm:"index"`
 	Hash   common.Hash `json:"hash"`
+	ParentHash   common.Hash `json:"parentHash"`
 }
 
 func NewIndexableBlockNumber(bigint *big.Int, hash common.Hash) *IndexableBlockNumber {
@@ -146,6 +147,12 @@ func NewIndexableBlockNumber(bigint *big.Int, hash common.Hash) *IndexableBlockN
 		Digits: len(number.String()) - 2,
 		Hash:   hash,
 	}
+}
+
+func NewIndexableBlockNumberWithParentHash(i *big.Int, h common.Hash, ph common.Hash) *IndexableBlockNumber {
+	ibn := NewIndexableBlockNumber(i, h)
+	ibn.ParentHash = ph
+	return ibn
 }
 
 // Coerces the value into *big.Int. Also handles nil *IndexableBlockNumber values to
