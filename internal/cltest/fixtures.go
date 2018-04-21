@@ -245,3 +245,10 @@ func MarkJobRunPendingBridge(jr models.JobRun, i int) models.JobRun {
 	jr.TaskRuns[i].Result.Status = models.RunStatusPendingBridge
 	return jr
 }
+
+func BlockHeaderFromFixture(path string) models.BlockHeader {
+	b := []byte(LoadJSON(path))
+	var bh models.BlockHeader
+	mustNotErr(json.Unmarshal(b, &bh))
+	return bh
+}

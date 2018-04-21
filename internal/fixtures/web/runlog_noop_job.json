@@ -1,4 +1,4 @@
 {
   "initiators": [{"type": "runLog"}],
-  "tasks": [{"type": "NoOp","confirmations": 100}]
+  "tasks": [{"type": "NoOp","confirmations": 10}]
 }

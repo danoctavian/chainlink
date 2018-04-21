@@ -163,7 +163,7 @@ func TestIntegration_RunLog(t *testing.T) {
 	app.Start()
 
 	j := cltest.FixtureCreateJobViaWeb(t, app, "../internal/fixtures/web/runlog_noop_job.json")
-	requiredConfs := 100
+	requiredConfs := 10
 
 	var initr models.Initiator
 	app.Store.One("JobID", j.ID, &initr)
@@ -391,4 +391,53 @@ func TestIntegration_MultiplierUint256(t *testing.T) {
 	val, err := jr.Result.Value()
 	assert.Nil(t, err)
 	assert.Equal(t, "0x00000000000000000000000000000000000000000000000000000000000f98b2", val)
+}
+
+func TestIntegration_ForkingRollback(t *testing.T) {
+	t.Parallel()
+
+	app, cleanup := cltest.NewApplication()
+	defer cleanup()
+
+	eth := app.MockEthClient()
+	logs := make(chan types.Log, 1)
+	eth.RegisterSubscription("logs", logs)
+	newHeads := make(chan models.BlockHeader, 10)
+	eth.RegisterSubscription("newHeads", newHeads)
+	app.Start()
+
+	j := cltest.FixtureCreateJobViaWeb(t, app, "../internal/fixtures/web/runlog_noop_job.json")
+	//requiredConfs := 10
+
+	preLogBlockNumber := 65536
+	newHeads <- cltest.BlockHeaderFromFixture("../internal/fixtures/eth/root_fork_block.json")
+
+	newHeads <- cltest.BlockHeaderFromFixture("../internal/fixtures/eth/losing_fork_block1.json")
+	losingForkLogBlockNumber := preLogBlockNumber + 1
+	logs <- cltest.NewRunLog(j.ID, cltest.NewAddress(), losingForkLogBlockNumber, `{}`)
+	losingJR := cltest.WaitForRuns(t, j, app.Store, 1)[0]
+
+	cltest.WaitForJobRunToPendConfirmations(t, app.Store, losingJR)
+
+	newHeads <- cltest.BlockHeaderFromFixture("../internal/fixtures/eth/losing_fork_block2.json")
+	cltest.WaitForJobRunToPendConfirmations(t, app.Store, losingJR)
+
+	newHeads <- cltest.BlockHeaderFromFixture("../internal/fixtures/eth/winning_fork_block1.json")
+	newHeads <- cltest.BlockHeaderFromFixture("../internal/fixtures/eth/winning_fork_block2.json")
+	newHeads <- cltest.BlockHeaderFromFixture("../internal/fixtures/eth/winning_fork_block3.json")
+	cltest.WaitForJobRunToPendConfirmations(t, app.Store, losingJR)
+	newHeads <- cltest.BlockHeaderFromFixture("../internal/fixtures/eth/winning_fork_block4.json")
+	winningForkLogBlockNumber := preLogBlockNumber + 4
+	logs <- cltest.NewRunLog(j.ID, cltest.NewAddress(), winningForkLogBlockNumber+1, `{}`)
+	newHeads <- models.BlockHeader{Number: cltest.BigHexInt(winningForkLogBlockNumber + 1)}
+	cltest.WaitForJobRunToPendConfirmations(t, app.Store, losingJR)
+	jr := cltest.WaitForRuns(t, j, app.Store, 2)[1]
+	newHeads <- models.BlockHeader{Number: cltest.BigHexInt(winningForkLogBlockNumber + 2)}
+	cltest.WaitForJobRunToPendConfirmations(t, app.Store, jr)
+	newHeads <- models.BlockHeader{Number: cltest.BigHexInt(winningForkLogBlockNumber + 8)}
+	cltest.WaitForJobRunToPendConfirmations(t, app.Store, jr)
+	newHeads <- models.BlockHeader{Number: cltest.BigHexInt(winningForkLogBlockNumber + 20)}
+	time.Sleep(1 * time.Second)
+	cltest.WaitForJobRunToPendConfirmations(t, app.Store, losingJR)
+	cltest.WaitForJobRunToComplete(t, app.Store, jr)
 }
